@@ -9,6 +9,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from src.contriever import Contriever
 import argparse
+import time
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 TOKENIZER = AutoTokenizer.from_pretrained('mcontriever')
@@ -28,7 +29,7 @@ print("model loaded")
 # retrieves embeddings from pt file
 def get_batch_embeddings(file_index):
     filename = "database/keys/key_" + str(file_index) + ".pt" # to change
-    return torch.load(filename)
+    return torch.load(filename,map_location= device)
 
 
 # update and maintain the knn list
@@ -44,11 +45,11 @@ def get_batch_embeddings(file_index):
 
 
 # retrieve text data given the nn_list which contains the index of the chunks
-def retrieve_texts(nn_dict):
+def retrieve_texts(nn_dict,database):
     line_numbers = [nn[0] for nn in sorted(nn_dict.items(), key=lambda x:x[1])]
     results = []
     for line in line_numbers:
-        results.append(json.loads(linecache.getline("database/text_database.json", line + 1)))
+        results.append(json.loads(linecache.getline(database, line + 1)))
     return results
 
 
@@ -58,8 +59,11 @@ def knn(sentence, k):
     query = MODEL(**input)
     query = query.to(device)
     nn_dict = {}
-    for i in tqdm(range(39895)):
+    for i in tqdm(range(1)):
+        time0 = time.time()
         embeddings = get_batch_embeddings(i) #list of [1,768] vectors
+        time1 = time.time()
+        print(f'load embeddings:{time1-time0}s')
         # for idx, embedding in enumerate(embeddings):
         #     embedding = embedding.to(device)
         #     curr = {}
@@ -67,13 +71,17 @@ def knn(sentence, k):
         #     curr["dist"] = l2_distance(query, embedding)
         #     update_nn(nn_list, curr, k)
         embeddings = torch.row_stack(embeddings).detach().to(device) # [n,768] matrix, where n is the number of chunks
+        time2 = time.time()
+        print(f'row stack:{time2-time1}')
         distances = torch.linalg.vector_norm(embeddings-query,ord=2,dim=1) # 2-norm, i.e. L2 distance of query to each embedding, return in shape [n]
+        time3 = time.time()
+        print(f'compute distance:{time3-time2}')
         sorted_dist, indices = torch.sort(distances)
         indices += i * 500
         nn_dict.update(dict(zip(indices[:k].tolist(),sorted_dist[:k].tolist())))
 
         
-    neighbors = retrieve_texts(nn_dict)
+    neighbors = retrieve_texts(nn_dict,"database/text_database.json")
     print(json.dumps(neighbors, ensure_ascii=False))
     return neighbors
 
